@@ -9,27 +9,31 @@ int64_t findMid(arma::vec const &spec) {
   } else {
     m = (spec.n_elem / 2) + 1;
   }
+  m -= 1; // 0-based
   int64_t n = m / 4;
-  arma::vec sv = spec.subvec(m - n - 1, m + n - 1);
+  arma::vec sv = spec.subvec(m - n , m + n);
   int64_t imin = sv.index_min();
-  return imin + m - n - 1;
+  return imin + m - n;
 }
 
 arma::vec move(arma::vec const &seg, int64_t lag) {
-
   if (lag == 0 || lag >= static_cast<int64_t>(seg.n_elem)) {
     return seg;
   }
   if (lag > 0) {
     arma::vec ins(lag, arma::fill::ones);
     ins *= seg(0);
-    arma::vec movedSeg = arma::join_cols(ins, seg.subvec(0, seg.n_elem - lag - 1));
+    arma::vec movedSeg =
+        arma::join_cols(ins, seg.subvec(0, seg.n_elem - lag - 1));
     return movedSeg;
   } else {
     lag = std::abs(lag);
-    arma::vec ins(lag - 1, arma::fill::ones);
+    // Fill insert with length lag with last element of segment
+    arma::vec ins(lag, arma::fill::ones);
     ins *= seg(seg.n_elem - 1);
-    arma::vec movedSeg = arma::join_cols(seg.subvec(lag - 1, seg.n_elem - 1), ins);
+    // Join
+    arma::vec movedSeg =
+        arma::join_cols(seg.subvec(lag, seg.n_elem - 1), ins);
     return movedSeg;
   }
 }
@@ -49,8 +53,8 @@ int64_t FFTcorr(arma::vec const &spectrum, arma::vec const &target,
     }
   }
   // std::cerr << "m -> " << m << ", diff -> " << diff << '\n';
-  arma::vec target_cp(m+diff, arma::fill::zeros);
-  arma::vec spectrum_cp(m+diff, arma::fill::zeros);
+  arma::vec target_cp(m + diff, arma::fill::zeros);
+  arma::vec spectrum_cp(m + diff, arma::fill::zeros);
   for (uint64_t i = 0; i < target.n_elem; i++) {
     target_cp(i) = target(i);
   }
@@ -84,17 +88,17 @@ int64_t FFTcorr(arma::vec const &spectrum, arma::vec const &target,
     lag = 0;
     return lag;
   }
-  if (maxpos > static_cast<int64_t>(vals.n_elem / 2)) {
+  if (static_cast<double>(maxpos) > (static_cast<double>(vals.n_elem) / 2.)) {
     lag = maxpos - vals.n_elem;
   } else {
-    lag = maxpos + 1;
+    lag = maxpos;
   }
 
   return lag;
 }
 
 arma::vec recurAlign(arma::vec const &spectrum, arma::vec const &reference,
-                int64_t shift, int64_t lookahead) {
+                     int64_t shift, int64_t lookahead) {
   if (spectrum.n_elem < 10) {
     return spectrum;
   }
@@ -110,7 +114,7 @@ arma::vec recurAlign(arma::vec const &spectrum, arma::vec const &reference,
   if (std::abs(lag) < static_cast<int64_t>(spectrum.n_elem)) {
     aligned = move(spectrum, lag);
   }
-  //std::cerr << "aligned -> " << aligned.n_elem <<'\n';
+  // std::cerr << "aligned -> " << aligned.n_elem <<'\n';
   int64_t mid = findMid(aligned);
   arma::vec firstSH = aligned.subvec(0, mid);
   arma::vec firstRH = reference.subvec(0, mid);
@@ -122,7 +126,6 @@ arma::vec recurAlign(arma::vec const &spectrum, arma::vec const &reference,
 }
 
 int main(int argc, char *argv[]) {
-
   std::cerr << "Loading matrix...\n";
   auto mat = arma::mat();
   mat.load(argv[1]);
@@ -152,11 +155,31 @@ int main(int argc, char *argv[]) {
 
   std::cerr << "Reference spectrum (0-indexed): " << idx << '\n';
 
+  arma::ivec constraints = {32, 64, 128, 256, 512, 1024, 2048, 4096, mat.n_cols};
+
   arma::vec ref = mat.row(idx).t();
   for (uint64_t i = 0; i < mat.n_rows; i++) {
     std::cerr << "Processing sample " << i << '\n';
     arma::vec tar = mat.row(i).t();
-    arma::vec ret = recurAlign(tar, ref, shift, lookahead);
+
+    double best_cor = -arma::datum::inf;
+    arma::vec ret;
+    int64_t best_constraint = 0;
+
+    for (auto const &constraint : constraints) {
+      std::cerr << "Trying constraint " << constraint << '\n';
+      arma::vec cur_ret = recurAlign(tar, ref, constraint, lookahead);
+      double cur_cor = arma::as_scalar(arma::cor(cur_ret, ref));
+      std::cerr << "Got cor: " << cur_cor << '\n';
+      if (cur_cor > best_cor) {
+        best_cor = cur_cor;
+        ret = cur_ret;
+        best_constraint = constraint;
+        std::cerr << "Best cor: " << best_cor
+                  << ", constrained at: " << constraint << '\n';
+      }
+    }
+
     ret *= rowsds(i);
     for (uint64_t j = 0; j < ret.n_elem; j++) {
       std::cout << ret(j);
